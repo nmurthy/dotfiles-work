@@ -1,0 +1,12 @@
+#!/usr/bin/env zsh
+{{ if eq .chezmoi.os "darwin" }}
+eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# Added by OrbStack: command-line tools and integration
+source ~/.orbstack/shell/init.zsh 2>/dev/null || :
+{{ else }}
+# Ensure login shells see the gcr-ssh-agent socket.
+if [[ -z "$SSH_AUTH_SOCK" && -n "$XDG_RUNTIME_DIR" && -S "$XDG_RUNTIME_DIR/gcr/ssh" ]]; then
+  export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/gcr/ssh"
+fi
+{{ end -}}

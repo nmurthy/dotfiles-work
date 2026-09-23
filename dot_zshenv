@@ -1,0 +1,24 @@
+typeset -U path PATH
+
+[[ -r "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+
+export PNPM_HOME="$HOME/.local/share/pnpm"
+export NVM_DIR="$HOME/.config/nvm"
+export BUN_INSTALL="$HOME/.bun"
+export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"
+
+path=(
+  "$HOME/.local/share/mise/shims"
+  "$HOME/.local/bin"
+  "$HOME/.cargo/bin"
+  "$PNPM_HOME"
+  "$HOME/.deno/bin"
+  "$HOME/.opencode/bin"
+  "$BUN_INSTALL/bin"
+  "/opt/nanobrew/prefix/bin"
+  "$HOME/.antigravity/antigravity/bin"
+  $path
+  "$HOME/.cache/lm-studio/bin"
+)
+
+export PATH

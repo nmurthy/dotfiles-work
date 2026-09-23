@@ -1,0 +1,12 @@
+@{{ .chezmoi.homeDir }}/.codex/RTK.md
+
+## Agent state
+
+- At session start in a git repo, run `~/.local/bin/agent-state hook` and read the output. It is this workstream's saved state; it prints nothing when there is none.
+- Before ending with unfinished work, follow `~/.agents/skills/handoff/SKILL.md`.
+- Write plans and specs into the workstream's `phases/NN-name/` dir (`agent-state dir <workstream>`), not the project repo.
+
+## Approval required
+
+- Never post public comments, create Linear issues, or deploy without explicit approval.
+- Open PRs as drafts only.

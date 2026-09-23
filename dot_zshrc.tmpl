@@ -1,0 +1,29 @@
+#!/usr/bin/env zsh
+
+# Powerlevel10k instant prompt (keep near the top of .zshrc).
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+# Path to your dotfiles.
+export ZDOTDIR="$HOME"
+
+# Zsh theme (kept for oh-my-zsh-style familiarity).
+ZSH_THEME="powerlevel10k/powerlevel10k"
+
+[[ -r "$HOME/.shellenv.zsh" ]] && source "$HOME/.shellenv.zsh"
+[[ -r "$HOME/.secrets.zsh" ]] && source "$HOME/.secrets.zsh"
+[[ -r "$HOME/.aliases" ]] && source "$HOME/.aliases"
+
+[[ -r "$HOME/.zsh/history.zsh" ]] && source "$HOME/.zsh/history.zsh"
+[[ -r "$HOME/.zsh/completion.zsh" ]] && source "$HOME/.zsh/completion.zsh"
+[[ -r "$HOME/.zsh/plugins.zsh" ]] && source "$HOME/.zsh/plugins.zsh"
+[[ -r "$HOME/.zsh/toolchains.zsh" ]] && source "$HOME/.zsh/toolchains.zsh"
+[[ -r "$HOME/.zsh/keybindings.zsh" ]] && source "$HOME/.zsh/keybindings.zsh"
+[[ -r "$HOME/.zsh/navigation.zsh" ]] && source "$HOME/.zsh/navigation.zsh"
+[[ -r "$HOME/.zsh/functions.zsh" ]] && source "$HOME/.zsh/functions.zsh"
+
+# Powerlevel10k prompt theme.
+[[ ! -f "$HOME/.p10k.zsh" ]] || source "$HOME/.p10k.zsh"
+if (( $+commands[mise] )); then eval "$(mise activate zsh)"; fi
+if (( $+commands[direnv] )); then eval "$(direnv hook zsh)"; fi

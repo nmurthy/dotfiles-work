@@ -1,0 +1,159 @@
+{
+  "advisorModel": "fable",
+  "agentPushNotifEnabled": true,
+  "autoDreamEnabled": true,
+  "editorMode": "vim",
+  "effortLevel": "xhigh",
+  "enabledPlugins": {
+    "caveman@caveman": true,
+    "claude-code-setup@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true,
+    "codex@openai-codex": true,
+    "context7@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "linear-cli@linear-cli": true,
+    "slack@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "telegram@claude-plugins-official": false
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "extraKnownMarketplaces": {
+    "caveman": {
+      "source": {
+        "repo": "JuliusBrussee/caveman",
+        "source": "github"
+      }
+    },
+    "fullstack-dev-skills": {
+      "source": {
+        "repo": "jeffallan/claude-skills",
+        "source": "github"
+      }
+    },
+    "linear-cli": {
+      "source": {
+        "repo": "schpet/linear-cli",
+        "source": "github"
+      }
+    },
+    "openai-codex": {
+      "source": {
+        "repo": "openai/codex-plugin-cc",
+        "source": "github"
+      }
+    }
+  },
+  "fastMode": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "\"$HOME\"/.local/bin/agent-state hook",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume|compact|clear"
+      }
+    ]
+  },
+  "inputNeededNotifEnabled": false,
+  "mcpServers": {
+    "baseten": {
+      "headers": {
+        "Authorization": "Bearer ${BASETEN_MCP_KEY}"
+      },
+      "type": "url",
+      "url": "https://api.baseten.co/mcp"
+    },
+    "baseten_docs": {
+      "type": "url",
+      "url": "https://docs.baseten.co/mcp"
+    }
+  },
+  "modelSettings": {
+    "claude-fable-5-1": {
+      "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
+    }
+  },
+  "outputStyle": "Concise",
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:kubernetes-sigs.github.io)",
+      "WebFetch(domain:macvendors.com)",
+      "WebSearch",
+      "mcp__agentic-search__web_search",
+      "mcp__agentic-search__news_search",
+      "mcp__agentic-search__ai_answer",
+      "mcp__agentic-search__fetch_content",
+      "mcp__agentic-search__deep_research",
+      "mcp__agentic-search__search_budget",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(curl:*)",
+      "Bash(dig:*)",
+      "Bash(echo:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(kubectl:*)",
+      "Bash(ping:*)",
+      "Bash(python3:*)",
+      "Bash(scp:*)",
+      "Bash(ssh:*)",
+      "Bash(tmux list-sessions:*)",
+      "Bash(tmux list-windows:*)",
+      "Bash(tmux list-panes:*)",
+      "Bash(tmux capture-pane:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv pip install:*)",
+      "Bash(uv run:*)",
+      "Bash(cargo test:*)",
+      "Bash(sqlite3:*)",
+      "Bash(sops:*)",
+      "Bash(jj st:*)",
+      "Bash(jj log:*)",
+      "Bash(jj diff:*)",
+      "Bash(jj describe:*)",
+      "Bash(jj edit:*)",
+      "Bash(jj new:*)",
+      "Bash(jj bookmark:*)",
+      "Bash(jj git:*)",
+      "Bash(jj rebase:*)",
+      "Bash(jj show:*)",
+      "Bash(flux reconcile:*)",
+      "Bash(helm repo add:*)",
+      "Bash(helm search repo:*)",
+      "Bash(./scripts/deploy.sh:*)",
+      "Bash(ln:*)",
+      "Bash(chezmoi source-path:*)",
+      "Bash(chezmoi cat-config:*)",
+      "Bash(chezmoi managed:*)",
+      "Bash(chezmoi add:*)",
+      "Bash(chezmoi cat:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "preferences": {
+    "git": "Always use 'main' as the branch name, never 'master'."
+  },
+  "showClearContextOnPlanAccept": true,
+  "showThinkingSummaries": true,
+  "skipAutoPermissionPrompt": true,
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "statusLine": {
+    "command": "npx -y @owloops/claude-powerline@latest --style=powerline --theme=tokyo-night",
+    "type": "command"
+  },
+  "theme": "dark-ansi",
+  "tui": "fullscreen",
+  "useAutoModeDuringPlan": true
+}

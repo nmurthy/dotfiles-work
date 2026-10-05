@@ -23,6 +23,16 @@ if ! dpkg -s "${pkgs[@]}" >/dev/null 2>&1; then
 fi
 [ -e "$bin/bat" ] || { [ -x /usr/bin/batcat ] && ln -s /usr/bin/batcat "$bin/bat"; }
 
+# Image zshenv refetches NPM_TOKEN in every zsh and prints gcloud warnings; skip when set, like bash's npm.sh.
+zenv=/etc/zsh/zshenv
+if grep -q '^NPM_TOKEN=\$(' "$zenv" 2>/dev/null; then
+  log "patch zshenv NPM_TOKEN"
+  sudo sed -i -E \
+    -e 's/^CODER_SA=\$\(curl/[ -n "${NPM_TOKEN:-}" ] || CODER_SA=$(curl/' \
+    -e 's/^NPM_TOKEN=\$\((.*)\)$/[ -n "${NPM_TOKEN:-}" ] || NPM_TOKEN=$(\1 2>\/dev\/null)/' "$zenv" ||
+    log "zshenv patch failed"
+fi
+
 # Login shell (/etc/passwd resets with /).
 user=$(id -un)
 case $(getent passwd "$user") in

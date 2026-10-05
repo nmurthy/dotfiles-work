@@ -60,11 +60,16 @@ if [ ! -x "$bin/nvim" ]; then
     ln -sf "$opt/nvim-linux-x86_64/bin/nvim" "$bin/nvim" || log "neovim failed"
 fi
 
+# Repo-scoped deploy key (~/.ssh/agent_state) via the github-agent-state ssh alias.
 if [ ! -d "$HOME/.agent-state/.git" ]; then
-  log "clone agent-state"
-  host=github.com
-  GIT_TERMINAL_PROMPT=0 timeout 120 git clone -q "git@$host:nmurthy/agent-state.git" "$HOME/.agent-state" ||
-    log "agent-state clone failed (no GitHub ssh access?); skipped"
+  if [ -f "$HOME/.ssh/agent_state" ]; then
+    log "clone agent-state"
+    GIT_SSH_COMMAND=ssh GIT_TERMINAL_PROMPT=0 timeout 120 \
+      git clone -q github-agent-state:nmurthy/agent-state.git "$HOME/.agent-state" ||
+      log "agent-state clone failed (deploy key not added?); skipped"
+  else
+    log "no ~/.ssh/agent_state deploy key; agent-state skipped"
+  fi
 fi
 
 # Detach fully; an inherited stdout would hang the start script.

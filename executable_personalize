@@ -72,6 +72,193 @@ if [ ! -d "$HOME/.agent-state/.git" ]; then
   fi
 fi
 
+# --- Sunshine (Moonlight host) on headless NVIDIA Xorg. Place before the cloud-browser launch. ---
+# / resets on every start: reinstall the .deb, Xorg config, uinput access and runtime dir.
+user=${user:-$(id -un)}
+sun_ver=2026.914.233613
+sun_deb=$HOME/.cache/sunshine/sunshine_${sun_ver}-1+ubuntu24.04_amd64.deb
+sun_size=11001782
+sun_pkgs=(xserver-xorg-input-libinput xinput x11-utils pulseaudio acl)
+if ! dpkg -s "${sun_pkgs[@]}" >/dev/null 2>&1; then
+  log "apt install sunshine deps"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q \
+    --no-install-recommends "${sun_pkgs[@]}" || log "sunshine deps failed"
+fi
+# Image ships the NVIDIA Xorg driver; install it if a new image drops it.
+nv_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1 | cut -d. -f1)
+if [ -n "$nv_major" ] && [ ! -e /usr/lib/x86_64-linux-gnu/nvidia/xorg/nvidia_drv.so ]; then
+  log "apt install nvidia xorg driver $nv_major"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q \
+    --no-install-recommends "xserver-xorg-video-nvidia-$nv_major-server" || log "nvidia xorg driver failed"
+fi
+if [ "$(dpkg-query -W -f '${Version}' sunshine 2>/dev/null)" != "${sun_ver}-1+ubuntu24.04" ]; then
+  if [ "$(stat -c%s "$sun_deb" 2>/dev/null)" != "$sun_size" ]; then
+    log "download sunshine $sun_ver"
+    mkdir -p "$(dirname "$sun_deb")"
+    curl -fsSL -o "$sun_deb.part" \
+      "https://github.com/LizardByte/Sunshine/releases/download/v$sun_ver/sunshine_${sun_ver}-1%2Bubuntu24.04_amd64.deb" &&
+      [ "$(stat -c%s "$sun_deb.part")" = "$sun_size" ] && mv "$sun_deb.part" "$sun_deb" ||
+      log "sunshine download failed"
+  fi
+  log "install sunshine $sun_ver"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q "$sun_deb" ||
+    log "sunshine install failed"
+fi
+# File caps are only for KMS capture; x11 capture doesn't need them, and caps make it a secure-exec process.
+[ -n "$(getcap /usr/bin/sunshine 2>/dev/null)" ] && { sudo setcap -r /usr/bin/sunshine || log "setcap -r failed"; }
+
+# Headless Xorg on the GPU. GCE L4 exposes virtual "NVIDIA VGX" heads, so no UseDisplayDevice "None".
+bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null | head -n1)
+if [ -n "$bus" ]; then
+  IFS=":." read -r b d f <<<"${bus#*:}"
+  bus_id="PCI:$((16#$b)):$((16#$d)):$((16#$f))"
+  xconf=$(mktemp)
+  cat >"$xconf" <<EOF
+Section "ServerLayout"
+    Identifier "Layout0"
+    Screen 0 "Screen0"
+EndSection
+Section "Files"
+    ModulePath "/usr/lib/x86_64-linux-gnu/nvidia/xorg"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+Section "ServerFlags"
+    Option "AutoAddDevices" "true"
+    Option "AutoEnableDevices" "true"
+EndSection
+Section "Device"
+    Identifier "Device0"
+    Driver "nvidia"
+    BusID "$bus_id"
+    Option "AllowEmptyInitialConfiguration" "true"
+    Option "HardDPMS" "false"
+    Option "MetaModes" "1920x1080 +0+0"
+EndSection
+Section "Screen"
+    Identifier "Screen0"
+    Device "Device0"
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Virtual 1920 1080
+    EndSubSection
+EndSection
+EOF
+  cmp -s "$xconf" /etc/X11/xorg-sunshine.conf ||
+    { log "write xorg-sunshine.conf"; sudo install -m 644 "$xconf" /etc/X11/xorg-sunshine.conf; }
+  rm -f "$xconf"
+else
+  log "no GPU bus id; xorg-sunshine.conf skipped"
+fi
+
+# Device access via ACLs: group changes don't reach the already-running agent's process tree.
+sudo modprobe uinput || log "modprobe uinput failed"
+for dev in /dev/uinput /dev/dri/card0 /dev/dri/renderD128; do
+  [ -e "$dev" ] && ! getfacl -p "$dev" 2>/dev/null | grep -q "^user:$user:rw" &&
+    { sudo setfacl -m "u:$user:rw" "$dev" || log "setfacl $dev failed"; }
+done
+# No logind session here, so no /run/user/<uid> for pulseaudio.
+rd=/run/user/$(id -u)
+[ -d "$rd" ] || sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$rd"
+
+# Chrome Remote Desktop: stream the existing :99 display instead of a CRD-owned one.
+# / resets on every start; the cached .deb and registration (~/.config/chrome-remote-desktop) persist.
+# Register once: DISPLAY= /opt/google/chrome-remote-desktop/start-host --code=... (from remotedesktop.google.com/headless).
+crd_dir=/opt/google/chrome-remote-desktop
+crd_script=$crd_dir/chrome-remote-desktop
+crd_deb=$HOME/.cache/crd/chrome-remote-desktop_current_amd64.deb
+crd_cfg=$HOME/.config/chrome-remote-desktop
+crd_unit=chrome-remote-desktop@$(id -un).service
+crd_dropin=/etc/systemd/system/$crd_unit.d/existing-display.conf
+crd_registered() { compgen -G "$crd_cfg/host#*.json" >/dev/null; }
+
+# Opt-in: only once the .deb is cached or the host is registered.
+if [ -s "$crd_deb" ] || crd_registered; then
+  if [ ! -x "$crd_script" ]; then
+    if [ ! -s "$crd_deb" ]; then
+      log "crd: download"
+      mkdir -p "${crd_deb%/*}" &&
+        curl -fsSL -o "$crd_deb.tmp" https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb &&
+        mv "$crd_deb.tmp" "$crd_deb" || log "crd: download failed"
+    fi
+    log "crd: install"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q \
+      --no-install-recommends "$crd_deb" || log "crd: install failed"
+  fi
+
+  # Patch: with CRD_EXISTING_DISPLAY set, attach to that display; never start, resize or stop it.
+  if [ -f "$crd_script" ] && ! grep -q CRD_EXISTING_DISPLAY "$crd_script"; then
+    log "crd: patch"
+    sudo python3 - "$crd_script" <<'PY' || log "crd: patch failed"
+import sys
+path = sys.argv[1]
+src = open(path).read()
+anchor = 'if __name__ == "__main__":'
+needed = ["class XDesktop(", "def _launch_server(self, extra_x_args)", "def launch_desktop_session(self)",
+          "def setup_audio(self, host_id, backoff_time)", "def check_server_responding(self)", anchor]
+missing = [n for n in needed if n not in src]
+if missing:
+    print("crd: WARNING script layout changed, patch skipped; missing: %s" % missing)
+    sys.exit(0)
+patch = '''# BEGIN CRD_EXISTING_DISPLAY patch
+if os.environ.get("CRD_EXISTING_DISPLAY"):
+  def _existing_launch_server(self, extra_x_args):
+    self.child_env["DISPLAY"] = os.environ["CRD_EXISTING_DISPLAY"]
+    self.child_env.pop("XAUTHORITY", None)
+    self.server_supports_randr = False
+    for _ in range(240):
+      if self.check_server_responding():
+        break
+      time.sleep(0.5)
+    else:
+      raise Exception("Existing X display is not responding.")
+    # Stand-in server process: exits when the display goes away. cleanup()
+    # only ever terminates this, never the real X server.
+    self.server_proc = subprocess.Popen(
+        ["/bin/sh", "-c", "while xdpyinfo >/dev/null 2>&1; do sleep 5; done"],
+        env=self.child_env)
+
+  def _existing_no_session(self):
+    pass
+
+  def _existing_no_audio(self, host_id, backoff_time):
+    self.audio_pipe = None
+    self.pipewire_inhibitor.disable()
+
+  XDesktop._launch_server = _existing_launch_server
+  XDesktop.launch_desktop_session = _existing_no_session
+  XDesktop.setup_audio = _existing_no_audio
+# END CRD_EXISTING_DISPLAY patch
+
+'''
+open(path, "w").write(src.replace(anchor, patch + anchor, 1))
+PY
+  fi
+
+  # No PAM/logind session: it would mount a tmpfs over /run/user/UID (hiding the pulse socket)
+  # and remove the user's runtime dir and IPC when CRD stops.
+  want="[Unit]
+StartLimitIntervalSec=600
+StartLimitBurst=10
+[Service]
+Environment=CRD_EXISTING_DISPLAY=:99 XDG_RUNTIME_DIR=/run/user/$(id -u)
+PAMName=
+Restart=on-failure
+RestartSec=10"
+  if [ "$(cat "$crd_dropin" 2>/dev/null)" != "$want" ]; then
+    log "crd: unit drop-in"
+    sudo mkdir -p "${crd_dropin%/*}" && printf '%s\n' "$want" | sudo tee "$crd_dropin" >/dev/null &&
+      sudo systemctl daemon-reload || log "crd: drop-in failed"
+  fi
+
+  if crd_registered; then
+    [ -f "$crd_cfg/host#$(printf %s "$(hostname)" | md5sum | cut -c1-32).json" ] ||
+      log "crd: WARNING no host config for hostname $(hostname); re-register"
+    # Waits up to 2 min for :99, so it can start before the display does.
+    systemctl is-active --quiet "$crd_unit" || { log "crd: start"; sudo systemctl start --no-block "$crd_unit"; }
+  fi
+fi
+
 # Detach fully; an inherited stdout would hang the start script.
 cb=$bin/cloud-browser
 if [ -x "$cb" ]; then

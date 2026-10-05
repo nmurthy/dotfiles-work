@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# sunshine-pin NNNN: approve the newest pending Moonlight pairing.
+set -euo pipefail
+. ~/.config/sunshine/creds
+api() { curl -sk -u "$SUNSHINE_USER:$SUNSHINE_PASS" "$@"; }
+id=$(api https://127.0.0.1:47990/api/pin | /usr/bin/python3 -c 'import json,sys; p=json.load(sys.stdin).get("pairings",[]); print(p[-1]["id"] if p else "")')
+[ -n "$id" ] || { echo "no pending pairing"; exit 1; }
+api -H "Content-Type: application/json" -X POST https://127.0.0.1:47990/api/pin \
+  -d "{\"pin\":\"$1\",\"name\":\"${2:-mac}\",\"pairing_id\":\"$id\"}"; echo

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Coder personalize hook: runs as the workspace user on every workspace start.
+# Idempotent; does nothing when everything is present. Log: ~/.personalize.log
+set -uo pipefail
+exec >>"$HOME/.personalize.log" 2>&1 </dev/null
+log() { echo "[$(date -Is)] $*"; }
+log "start"
+
+bin=$HOME/.local/bin
+opt=$HOME/.local/opt
+mkdir -p "$bin" "$opt"
+export PATH="$bin:$PATH"
+
+# apt: / resets on rebuild. Lock timeout waits out env_startup's playwright --with-deps.
+pkgs=(fluxbox x11vnc novnc websockify vulkan-tools python3-websocket fonts-noto fonts-noto-color-emoji
+  imagemagick xdotool unison zsh fzf zoxide direnv bat ripgrep btop)
+if ! dpkg -s "${pkgs[@]}" >/dev/null 2>&1; then
+  log "apt install"
+  # update exits non-zero on the broken HashiCorp repo key; install still works.
+  sudo apt-get -o DPkg::Lock::Timeout=900 update -q || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q \
+    --no-install-recommends "${pkgs[@]}" || log "apt install failed"
+fi
+[ -e "$bin/bat" ] || { [ -x /usr/bin/batcat ] && ln -s /usr/bin/batcat "$bin/bat"; }
+
+# Login shell (/etc/passwd resets with /).
+user=$(id -un)
+case $(getent passwd "$user") in
+  *:/usr/bin/zsh) ;;
+  *) log "chsh zsh"; sudo chsh -s /usr/bin/zsh "$user" || log "chsh failed" ;;
+esac
+
+# Home tools persist on /home: install once.
+latest() { curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" | sed 's#.*/tag/v##'; }
+untar() { # url dir
+  mkdir -p "$2" && curl -fsSL "$1" | tar -xz -C "$2"
+}
+gh=https://github.com
+if [ ! -x "$bin/rtk" ]; then
+  log "install rtk"
+  untar "$gh/rtk-ai/rtk/releases/latest/download/rtk-x86_64-unknown-linux-musl.tar.gz" "$bin" || log "rtk failed"
+fi
+if [ ! -x "$bin/agent-deck" ]; then
+  log "install agent-deck"
+  v=$(latest asheshgoplani/agent-deck) && t=$(mktemp -d) &&
+    untar "$gh/asheshgoplani/agent-deck/releases/download/v$v/agent-deck_${v}_linux_amd64.tar.gz" "$t" &&
+    mv "$t/agent-deck" "$bin/" || log "agent-deck failed"
+fi
+if [ ! -x "$bin/lazygit" ]; then
+  log "install lazygit"
+  v=$(latest jesseduffield/lazygit) && t=$(mktemp -d) &&
+    untar "$gh/jesseduffield/lazygit/releases/download/v$v/lazygit_${v}_linux_x86_64.tar.gz" "$t" &&
+    mv "$t/lazygit" "$bin/" || log "lazygit failed"
+fi
+# Image nvim (0.9) is too old for LazyVim.
+if [ ! -x "$bin/nvim" ]; then
+  log "install neovim"
+  rm -rf "$opt/nvim-linux-x86_64" &&
+    untar "$gh/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" "$opt" &&
+    ln -sf "$opt/nvim-linux-x86_64/bin/nvim" "$bin/nvim" || log "neovim failed"
+fi
+
+if [ ! -d "$HOME/.agent-state/.git" ]; then
+  log "clone agent-state"
+  host=github.com
+  GIT_TERMINAL_PROMPT=0 timeout 120 git clone -q "git@$host:nmurthy/agent-state.git" "$HOME/.agent-state" ||
+    log "agent-state clone failed (no GitHub ssh access?); skipped"
+fi
+
+# Detach fully; an inherited stdout would hang the start script.
+cb=$bin/cloud-browser
+if [ -x "$cb" ]; then
+  setsid nohup "$cb" start >/dev/null 2>&1 </dev/null &
+else
+  log "no $cb yet (dotfiles not applied); skipped"
+fi
+log "done"

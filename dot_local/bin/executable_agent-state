@@ -6,6 +6,10 @@ set -u
 
 STORE="${AGENT_STATE_DIR:-$HOME/.agent-state}"
 HOOK_MAX=8000
+CTX_MAX=3000
+STATE_MAX=${AGENT_STATE_STATE_MAX:-6000}   # autosync compacts STATE.md above this
+LOG_KEEP=100                               # autosync keeps this many LOG.md entries
+SELF=$0
 
 die() { echo "agent-state: $*" >&2; exit 1; }
 in_git() { git rev-parse --is-inside-work-tree >/dev/null 2>&1; }
@@ -204,6 +208,189 @@ cmd_sync() {
 }
 
 # SessionStart context. Never fails, never touches the network.
+cmd_remind() {
+  # UserPromptSubmit hook: orchestrator contract, only in a mapped workstream, never in delegates.
+  [ "${AGENT_STATE_ROLE:-}" = delegate ] && return 0
+  in_git || return 0
+  SLUG=$(slug); [ -n "$SLUG" ] || return 0
+  PDIR="$STORE/projects/$SLUG"
+  [ -d "$PDIR" ] || return 0
+  find_ws "$(branch)" >/dev/null || return 0
+  [ -f "$STORE/ORCHESTRATOR.md" ] && cat "$STORE/ORCHESTRATOR.md"
+  return 0
+}
+cmd_log() {
+  # log <workstream> <line...>: append a timestamped line to the workstream LOG.md
+  local ws=$1; shift; local d
+  d=$(ls -d "$STORE"/projects/*/"$ws" 2>/dev/null | head -1)
+  [ -n "$d" ] && [ -d "$d" ] || die "no workstream dir for $ws under $STORE/projects"
+  append_log "$d" "$*"
+}
+append_log() {
+  printf -- '- %s %s: %s\n' "$(now)" "$(host)" "$2" >> "$1/LOG.md" || die "cannot write $1/LOG.md"
+  tail -1 "$1/LOG.md"
+}
+
+# Quiet lookup of the workstream for cwd: sets WS, WSDIR; returns 1 if unmapped.
+resolve_ws() {
+  in_git || return 1
+  SLUG=$(slug); [ -n "$SLUG" ] || return 1
+  PDIR="$STORE/projects/$SLUG"
+  [ -d "$PDIR" ] || return 1
+  WS=$(find_ws "$(branch)") || return 1
+  WSDIR="$PDIR/$WS"
+}
+
+# "## NAME" section body: non-empty, non-comment lines, trimmed, max 6.
+section() {
+  awk -v h="## $2" '/^## /{on=($0==h); next}
+    on && NF && !/^<!--/ {sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print; if (++n>=6) exit}' "$1"
+}
+
+# agent-deck context_command: workstream, goal/phase/next, priorities. Read-only, no network.
+cmd_context() {
+  local out s body
+  out=$(
+    if resolve_ws; then
+      echo "$WS"
+      for s in Goal "Current phase" Next; do
+        body=$(section "$WSDIR/STATE.md" "$s")
+        [ -n "$body" ] && printf '%s:\n%s\n' "$s" "$body"
+      done
+    else
+      echo "no workstream"
+    fi
+    if [ -f "$STORE/PRIORITIES.md" ]; then
+      echo "Priorities:"
+      grep -E '^[[:space:]]*([0-9]+[.)]|[-*+])[[:space:]]+[^[:space:]]' "$STORE/PRIORITIES.md" | head -10
+    fi
+  )
+  printf '%s\n' "${out:0:$CTX_MAX}"
+}
+
+# Trim and join non-empty lines of $1 with $2.
+join_lines() {
+  printf '%s\n' "$1" | awk -v sep="$2" 'NF {sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); printf "%s%s", (n++ ? sep : ""), $0}'
+}
+
+# agent-deck answer_command. Stdin: summary lines (plan: first line = plan title, rest = feedback).
+# Env AGENTDECK_QUESTION_KIND/DECISION/SESSION. Unmapped cwd: silent no-op. Never commits.
+cmd_answer() {
+  local input one decision session first why verdict
+  input=$(cat)
+  resolve_ws || return 0
+  one=$(join_lines "$input" '; ')
+  [ -n "$one" ] || return 0
+  if [ "${AGENTDECK_QUESTION_KIND:-ask}" != plan ]; then append_log "$WSDIR" "answered: $one"; return; fi
+  decision=${AGENTDECK_QUESTION_DECISION:-answer}
+  session=${AGENTDECK_QUESTION_SESSION:-}
+  append_log "$WSDIR" "plan $decision: $one"
+  case "$decision" in approve) verdict=approved ;; reject) verdict=rejected ;; *) verdict=$decision ;; esac
+  first=$(printf '%s\n' "$input" | awk 'NF {sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print; exit}')
+  why=$(join_lines "$(printf '%s\n' "$input" | awk 'NF' | sed 1d)" ' ')
+  printf '\n## %s: Plan %s%s\nWhy: %s\n' "$(date +%Y-%m-%d)" "$verdict" "${session:+ ($session)}" "${why:-$first}" >> "$WSDIR/DECISIONS.md" \
+    || die "cannot write $WSDIR/DECISIONS.md"
+}
+# Frontmatter block (through the closing ---).
+frontmatter() { awk 'NR==1 && $0!="---" {exit} {print} NR>1 && $0=="---" {exit}' "$1"; }
+# Raw "## Standing approval..." section, heading included.
+standing() { awk '/^## /{on=(index($0, "## Standing approval")==1)} on && NF' "$1"; }
+bytes() { wc -c < "$1" | tr -d ' '; }
+ws_dir() { ls -d "$STORE"/projects/*/"$1" 2>/dev/null | head -1; }
+
+# compact <ws> [--dry-run]: rewrite an oversized STATE.md with a headless model, archive the old copy.
+cmd_compact() {
+  local ws=${1:-} dry=${2:-} d f lock out before old n
+  [ -n "$ws" ] || die "usage: agent-state compact <workstream> [--dry-run]"
+  d=$(ws_dir "$ws"); f="$d/STATE.md"
+  [ -f "$f" ] || die "no STATE.md for $ws"
+  command -v claude >/dev/null || die "claude CLI not found"
+  lock="$STORE/.git/compact-$ws.lock"
+  # Clear a lock left by a run that died over an hour ago.
+  [ -n "$(find "$lock" -maxdepth 0 -mmin +60 2>/dev/null)" ] && rmdir "$lock"
+  mkdir "$lock" 2>/dev/null || die "compaction already running for $ws"
+  out=$(mktemp); before=$(git hash-object "$f"); old=$(bytes "$f")
+  {
+    cat <<'EOF'
+Rewrite the STATE.md below so the whole file is under 3500 bytes. Output only the new file: no code fences, no commentary.
+- Copy the YAML frontmatter (first --- to second ---) byte for byte.
+- Copy any "## Standing approval" section byte for byte. It wins over everything else in the file: for anything it covers, delete run-count, attempt, retry, cap-counter, ledger, latch, arm/rearm, launcher-draft and per-run approval steps, and rewrite Next so agents run the work directly. Keep limits it does not cover (pushes, PRs, publication, deploys, credentials).
+- Keep sections: Goal, Current phase, Done (recent) (max 5 lines), Next, Open gates or Blockers (only still-live ones), Resume notes.
+- Keep exact paths, branches, commit SHAs, PR numbers, URLs, run and session IDs still needed to resume. Keep approvals, caps and prohibitions still in force.
+- Drop history, superseded phases, finished verification detail, artifact hashes of past work, narrative, repeated caveats.
+- Never invent facts. Present tense, short lines.
+
+EOF
+    cat "$f"
+  } | (cd "${TMPDIR:-/tmp}" && AGENT_STATE_ROLE=delegate claude -p --model "${AGENT_STATE_COMPACT_MODEL:-claude-sonnet-5}" \
+        --tools "" --no-session-persistence --disable-slash-commands --strict-mcp-config --setting-sources "") > "$out" 2>/dev/null
+  # Strip code fences if the model added them.
+  if head -1 "$out" | grep -q '^```'; then sed -i.bak '1d;$d' "$out"; rm -f "$out.bak"; fi
+  n=$(bytes "$out")
+  if [ "$(frontmatter "$out")" != "$(frontmatter "$f")" ]; then echo "agent-state compact: frontmatter changed; kept original" >&2
+  elif [ "$(standing "$out")" != "$(standing "$f")" ]; then echo "agent-state compact: standing approval changed; kept original" >&2
+  elif ! grep -q '^## Goal' "$out" || ! grep -q '^## Current phase' "$out" || ! grep -q '^## Next' "$out"; then echo "agent-state compact: missing Goal/Current phase/Next; kept original" >&2
+  elif [ "$n" -ge "$STATE_MAX" ]; then echo "agent-state compact: result $n bytes >= $STATE_MAX; kept original" >&2
+  elif [ "$dry" = --dry-run ]; then cat "$out"; echo "--- dry run: $old -> $n bytes" >&2
+  elif [ "$(git hash-object "$f")" != "$before" ]; then echo "agent-state compact: STATE.md changed meanwhile; kept it" >&2
+  else
+    mkdir -p "$d/archive"
+    cp "$f" "$d/archive/STATE-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    mv "$out" "$f"
+    append_log "$d" "STATE.md compacted $old -> $n bytes; old copy in archive/"
+  fi
+  rm -f "$out"; rmdir "$lock"
+}
+
+# Move all but the last LOG_KEEP LOG.md entries to archive/LOG-archive.txt.
+rotate_log() {
+  local d=$1 f="$1/LOG.md" n tmp
+  [ -f "$f" ] || return 0
+  n=$(grep -c '^- ' "$f")
+  [ "$n" -gt $((LOG_KEEP + 50)) ] || return 0
+  mkdir -p "$d/archive"; tmp=$(mktemp)
+  grep '^- ' "$f" | head -n $((n - LOG_KEEP)) >> "$d/archive/LOG-archive.txt"
+  { grep -v '^- ' "$f"; grep '^- ' "$f" | tail -n "$LOG_KEEP"; } > "$tmp" && mv "$tmp" "$f"
+}
+
+# Stop hook helper: on the host that last wrote each workstream, rotate LOG.md and start a
+# background compaction when STATE.md exceeds STATE_MAX (at most every 30 min per workstream).
+maintain() {
+  [ "${AGENT_STATE_ROLE:-}" = delegate ] && return 0
+  local f d ws stamp age
+  for f in "$STORE"/projects/*/*/STATE.md; do
+    [ -f "$f" ] || continue
+    [ "$(fm "$f" host)" = "$(host)" ] || continue
+    d=$(dirname "$f"); ws=$(basename "$d")
+    rotate_log "$d"
+    [ "$(bytes "$f")" -gt "$STATE_MAX" ] || continue
+    command -v claude >/dev/null || continue
+    stamp="$STORE/.git/compact-$ws.stamp"; age=999999
+    [ -f "$stamp" ] && age=$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp") ))
+    [ "$age" -gt 1800 ] || continue
+    touch "$stamp"
+    nohup env AGENT_STATE_ROLE=delegate "$SELF" compact "$ws" >> "$STORE/.git/compact.log" 2>&1 &
+  done
+}
+cmd_autosync() {
+  # Stop hook: commit dirty store and sync; when clean, pull at most every 5 min. Never fails the hook.
+  [ -d "$STORE/.git" ] || return 0
+  maintain 2>/dev/null
+  local stamp="$STORE/.git/autosync.stamp" age=999999
+  git -C "$STORE" add -A >/dev/null 2>&1
+  if ! git -C "$STORE" diff --cached --quiet; then
+    git -C "$STORE" commit -q -m "auto: $(host) $(now)" >/dev/null 2>&1
+    cmd_sync >/dev/null 2>&1 || echo "agent-state autosync: sync failed; run agent-state sync" >&2
+    touch "$stamp"; return 0
+  fi
+  [ -f "$stamp" ] && age=$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp") ))
+  if [ "$age" -gt 300 ]; then
+    git -C "$STORE" remote get-url origin >/dev/null 2>&1 && git -C "$STORE" pull -q --rebase --autostash origin "$(branch_store)" >/dev/null 2>&1
+    touch "$stamp"
+  fi
+  return 0
+}
+branch_store() { git -C "$STORE" symbolic-ref --short -q HEAD 2>/dev/null || echo main; }
 cmd_hook() {
   in_git || return 0
   SLUG=$(slug); [ -n "$SLUG" ] || return 0
@@ -239,6 +426,31 @@ cmd_hook() {
   fi
 }
 
+# draft <ws> <target> <where> [id]: stdin body -> drafts/<id>.md (status pending); prints path. Never commits.
+cmd_draft() {
+  local ws=${1:-} target=${2:-} where=${3:-} id=${4:-} d f
+  [ -n "$ws" ] && [ -n "$target" ] && [ -n "$where" ] || die "usage: agent-state draft <workstream> <target> <where> [id] < body"
+  case "$target" in slack|github|linear|email) ;; *) die "bad target '$target' (slack|github|linear|email)" ;; esac
+  d=$(ws_dir "$ws"); [ -n "$d" ] || die "no workstream dir for $ws under $STORE/projects"
+  [ -n "$id" ] || id="$target-$(date -u +%Y%m%d-%H%M%S)"
+  valid_name "$id"
+  mkdir -p "$d/drafts" || die "cannot create $d/drafts"
+  f="$d/drafts/$id.md"
+  [ -e "$f" ] && die "draft exists: $f"
+  { printf -- '---\ntarget: %s\nwhere: %s\nstatus: pending\nsession: %s\n---\n' "$target" "$where" \
+      "${AGENTDECK_INSTANCE_ID:-}"; cat; } > "$f" || die "cannot write $f"
+  echo "$f"
+}
+
+# draft-sha <path>: sha1(body)[:12]; body = text after front matter, leading/trailing newlines stripped.
+cmd_draft_sha() {
+  [ -f "${1:-}" ] || die "usage: agent-state draft-sha <path>"
+  awk 'NR==1 { fm = ($0 == "---"); if (fm) next }
+    fm && !past { if ($0 == "---") past = 1; next }
+    !started && $0 == "" { next }
+    { started = 1; print }' "$1" | { printf '%s' "$(cat)"; } | shasum | cut -c1-12
+}
+
 usage() {
   cat <<'EOF'
 usage: agent-state <command>
@@ -250,11 +462,27 @@ usage: agent-state <command>
   index            regenerate INDEX.md
   commit [msg]     commit all store changes
   sync             pull --rebase and push if origin exists
+  log <ws> <text>  append a timestamped line to the workstream LOG.md
+  remind           UserPromptSubmit hook: print ORCHESTRATOR.md in a mapped workstream (skipped if AGENT_STATE_ROLE=delegate)
+  autosync         Stop hook: rotate LOG.md, compact big STATE.md in background, commit+sync if dirty, else pull every 5 min
+  compact <ws> [--dry-run]  rewrite STATE.md under 3500 bytes with a headless model; old copy to archive/
+  draft <ws> <target> <where> [id]  write drafts/<id>.md from stdin (pending approval); prints path
+  draft-sha <path>  sha1(body)[:12] of a draft (approval token)
+  context          workstream goal/phase/next + priorities (agent-deck context_command)
+  answer           log stdin answer summary; plans also to DECISIONS.md (agent-deck answer_command)
 EOF
 }
 
 case "${1:-}" in
   hook) cmd_hook 2>/dev/null; exit 0 ;;
+  remind) cmd_remind 2>/dev/null; exit 0 ;;
+  autosync) cmd_autosync; exit 0 ;;
+  context) cmd_context 2>/dev/null; exit 0 ;;
+  answer) cmd_answer ;;
+  draft-sha) shift; cmd_draft_sha "$@" ;;
+  draft) shift; cmd_draft "$@" ;;
+  log) shift; cmd_log "$@" ;;
+  compact) shift; cmd_compact "$@" ;;
   init) shift; cmd_init "$@" ;;
   map) shift; cmd_map "$@" ;;
   ws) cmd_ws ;;

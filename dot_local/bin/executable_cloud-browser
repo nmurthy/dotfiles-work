@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# cloud-browser start|stop|status
+D=:99
+H=$HOME
+L=$H/.cloud-browser/logs
+PW=$H/.cloud-browser-vncpass
+PROF=$H/.cloud-browser-profile
+mkdir -p "$L" "$H/.cloud-browser"
+export DISPLAY=$D
+# Start page: first line of ~/.cloud-browser/url.
+URL=$(head -n1 "$H/.cloud-browser/url" 2>/dev/null)
+CB_EXTRA="${CB_EXTRA---use-angle=vulkan --use-gl=angle --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --ignore-gpu-blocklist --enable-gpu-rasterization}"
+alive() { pgrep -u "$(id -u)" -f "$1" >/dev/null; }
+start() {
+  [ -s "$PW" ] || { (umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 12 > "$PW"); }
+  chmod 600 "$PW"
+  x11vnc -storepasswd "$(cat "$PW")" "$H/.cloud-browser/vncauth" >/dev/null 2>&1; chmod 600 "$H/.cloud-browser/vncauth"
+  alive "Xvfb $D " || { rm -f /tmp/.X99-lock; setsid nohup Xvfb $D -screen 0 1920x1080x24 -nolisten tcp >"$L/xvfb.log" 2>&1 </dev/null & sleep 1; }
+  alive "fluxbox" || { setsid nohup fluxbox >"$L/fluxbox.log" 2>&1 </dev/null & }
+  alive "x11vnc .*-rfbport 5900" || setsid nohup x11vnc -display $D -rfbport 5900 -localhost -rfbauth "$H/.cloud-browser/vncauth" -forever -shared -noxdamage >"$L/x11vnc.log" 2>&1 </dev/null &
+  alive "websockify .*6080" || setsid nohup websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900 >"$L/novnc.log" 2>&1 </dev/null &
+  if ! curl -s http://127.0.0.1:9222/json/version >/dev/null; then
+    rm -f "$PROF"/Singleton*
+    setsid nohup google-chrome --user-data-dir="$PROF" --no-first-run --no-default-browser-check --start-maximized \
+      --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 $CB_EXTRA \
+      "${URL:-about:blank}" >"$L/chrome.log" 2>&1 </dev/null &
+  fi
+  sleep 3; status
+}
+stop() {
+  pkill -u "$(id -u)" -f "user-data-dir=$PROF"; pkill -u "$(id -u)" -f "websockify .*6080"
+  pkill -u "$(id -u)" -f "x11vnc .*-rfbport 5900"; pkill -u "$(id -u)" -x fluxbox; pkill -u "$(id -u)" -f "Xvfb $D "
+  echo stopped
+}
+status() {
+  for p in "Xvfb $D " fluxbox "x11vnc .*-rfbport 5900" "websockify .*6080" "user-data-dir=$PROF"; do
+    alive "$p" && echo "up   $p" || echo "DOWN $p"; done
+}
+case "$1" in start) start;; stop) stop;; status) status;; *) echo "usage: $0 start|stop|status"; exit 1;; esac

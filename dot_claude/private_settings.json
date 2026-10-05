@@ -18,7 +18,8 @@
     "telegram@claude-plugins-official": false
   },
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
   },
   "extraKnownMarketplaces": {
     "caveman": {
@@ -48,6 +49,17 @@
   },
   "fastMode": true,
   "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v rtk >/dev/null 2>&1 || exit 0; rtk hook claude",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

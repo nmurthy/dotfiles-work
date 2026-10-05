@@ -8,12 +8,14 @@ if [[ -o zle ]] && command -v fzf >/dev/null 2>&1; then
 fi
 
 # Copy last command to clipboard.
-copy-last-cmd() {
-  local last_command
-  last_command="$(fc -ln -1 | sed 's/^[[:space:]]*//')"
-  print -rn -- "$last_command" | pbcopy
-  zle -M "Copied: $last_command"
-}
+if command -v pbcopy >/dev/null 2>&1; then
+  copy-last-cmd() {
+    local last_command
+    last_command="$(fc -ln -1 | sed 's/^[[:space:]]*//')"
+    print -rn -- "$last_command" | pbcopy
+    zle -M "Copied: $last_command"
+  }
 
-zle -N copy-last-cmd
-bindkey '^[c' copy-last-cmd
+  zle -N copy-last-cmd
+  bindkey '^[c' copy-last-cmd
+fi

@@ -49,6 +49,50 @@
   },
   "fastMode": true,
   "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ],
+        "matcher": "permission_prompt|elicitation_dialog"
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ],
+        "matcher": "AskUserQuestion|ExitPlanMode"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -58,9 +102,38 @@
           }
         ],
         "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ],
+        "matcher": "AskUserQuestion|ExitPlanMode"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
       }
     ],
     "SessionStart": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
+      },
       {
         "hooks": [
           {
@@ -70,6 +143,44 @@
           }
         ],
         "matcher": "startup|resume|compact|clear"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; AGENTDECK_STOP_SYNC=1 \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"$HOME\"/.local/bin/agent-state autosync",
+            "timeout": 60,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "[ -x \"$HOME/.local/bin/agent-deck\" ] || exit 0; \"$HOME\"/.local/bin/agent-deck hook-handler",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"$HOME\"/.local/bin/agent-state remind",
+            "type": "command"
+          }
+        ]
       }
     ]
   },

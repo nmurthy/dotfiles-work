@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Coder personalize hook: runs as the workspace user on every workspace start.
 # Idempotent; does nothing when everything is present. Log: ~/.personalize.log
+# Also called by install.sh (the module can run before dotfiles create this file): once per boot unless --force.
 set -uo pipefail
 exec >>"$HOME/.personalize.log" 2>&1 </dev/null
 log() { echo "[$(date -Is)] $*"; }
+boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+stamp=$HOME/.personalize.boot
+# Background children close fd 9 (9>&-) so they don't hold the lock.
+exec 9>"$HOME/.personalize.lock"
+flock -n 9 || { log "already running; skipped"; exit 0; }
+if [ "${1:-}" != --force ] && [ -n "$boot" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$boot" ]; then
+  log "already ran this boot; skipped"
+  exit 0
+fi
 log "start"
 
 bin=$HOME/.local/bin
@@ -80,6 +90,17 @@ if [ ! -d "$HOME/.agent-state/.git" ]; then
   else
     log "no ~/.ssh/agent_state deploy key; agent-state skipped"
   fi
+fi
+
+# Private skills live in agent-state (never in the public dotfiles). Link them for Claude Code.
+if [ -d "$HOME/.agent-state/skills" ]; then
+  mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills"
+  for d in "$HOME/.agent-state/skills"/*/; do
+    [ -d "$d" ] || continue
+    s=$(basename "$d")
+    ln -sfn "${d%/}" "$HOME/.agents/skills/$s"
+    ln -sfn "../../.agents/skills/$s" "$HOME/.claude/skills/$s"
+  done
 fi
 
 # --- Sunshine (Moonlight host) on headless NVIDIA Xorg. Place before the cloud-browser launch. ---
@@ -269,11 +290,15 @@ RestartSec=10"
   fi
 fi
 
+# agent-deck notify-daemon + conductor heartbeat loops; coder-agent-bootstrap installs agent-loops.
+[ ! -x "$bin/agent-loops" ] || "$bin/agent-loops" start 9>&- || log "agent-loops failed"
+
 # Detach fully; an inherited stdout would hang the start script.
 cb=$bin/cloud-browser
 if [ -x "$cb" ]; then
-  setsid nohup "$cb" start >/dev/null 2>&1 </dev/null &
+  setsid nohup "$cb" start >/dev/null 2>&1 </dev/null 9>&- &
 else
   log "no $cb yet (dotfiles not applied); skipped"
 fi
+[ -z "$boot" ] || echo "$boot" >"$stamp"
 log "done"

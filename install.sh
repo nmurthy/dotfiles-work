@@ -19,4 +19,7 @@ fi
 [ -d "$HOME/.antidote" ] || git clone -q --depth=1 https://github.com/mattmc3/antidote.git "$HOME/.antidote"
 
 # Coder reruns this on every start without a TTY; --force lets the source win.
-exec "$chezmoi" init --apply --force --exclude=encrypted --source "$src"
+"$chezmoi" init --apply --force --exclude=encrypted --source "$src"
+
+# The personalize module may run before the first apply creates ~/personalize; it skips if already run this boot.
+[ ! -x "$HOME/personalize" ] || "$HOME/personalize"
